@@ -8,7 +8,7 @@
 
 class ConsoleWindow {
 public:
-	
+
 };
 
 enum Color {
@@ -43,13 +43,29 @@ public:
 	std::string title;
 	std::thread gameThread;;
 
-	class Shape{};
+	class Shape {};
 
 private:
 	HANDLE hConsole;
+	HANDLE hInputConsole;
 	CHAR_INFO *screenBuffer;
 	SMALL_RECT dwBytesWritten;
 	bool isRunning = false;
+	short newKeystate[256] = { 0 };
+	short oldKeyState[256] = { 0 };
+	bool newMouseState[5] = { 0 };
+	bool oldMouseState[5] = { 0 };
+
+protected:
+	struct KeyState
+	{
+		bool bPressed;
+		bool bReleased;
+		bool bHeld;
+	} keys[256], mouse[5];
+
+	float mousePosX;
+	float mousePosY;
 
 
 public:
@@ -69,26 +85,40 @@ public:
 		toggleConsoleCursor(false);
 	}
 
+
 	void StartGameLoop()
 	{
 		gameThread = std::thread(&ConsoleEngine::applicationThread, this);
 		gameThread.join();
 	}
 
+
 	virtual void Start() = 0;
 	virtual void Update(float timeSinceLastFrame) = 0;
 
 
+
 	void repaintBuffer() {
-		WriteConsoleOutput(hConsole, screenBuffer, {(short)bufferWidth, (short)bufferHeight}, { 0, 0 }, &dwBytesWritten);
+		WriteConsoleOutput(hConsole, screenBuffer, { (short)bufferWidth, (short)bufferHeight }, { 0, 0 }, &dwBytesWritten);
+	}
+
+
+	bool charInRange(int x, int y)
+	{
+		if (x > bufferWidth || x < 0 || y > bufferHeight || y < 0) return false;
+		else
+			return true;
 	}
 
 
 	void drawChar(int x, int y, char c, int color = Color::DEF)
 	{
-		int i = coordinateToIndex(x, y, bufferWidth);
-		screenBuffer[i].Char.UnicodeChar = c;
-		screenBuffer[i].Attributes = color;
+		if (charInRange(x, y))
+		{
+			int i = coordinateToIndex(x, y, bufferWidth);
+			screenBuffer[i].Char.UnicodeChar = c;
+			screenBuffer[i].Attributes = color;
+		}
 	}
 
 
@@ -101,6 +131,7 @@ public:
 	{
 		screenBuffer[index].Char.UnicodeChar = c;
 	}
+
 
 
 	void drawChar(int x, int y, int c, int color = Color::DEF)
@@ -116,20 +147,20 @@ public:
 		int index = coordinateToIndex(x, y, bufferWidth);
 		int len = str.size();
 		int j = 0;
-		for (int i = index; i <= index + (len-1); i++)
+		for (int i = index; i <= index + (len - 1); i++)
 		{
 			screenBuffer[i].Char.UnicodeChar = str[j];
 			screenBuffer[i].Attributes = color;
 			j++;
 		}
-		
+
 	}
 
 	void drawRect(int x, int y, int w, int h, int c, int color = Color::DEF)
 	{
-		for (int i = x; i < x+w; i++)
+		for (int i = x; i < x + w; i++)
 		{
-			for (int j = y; j < y+h; j++)
+			for (int j = y; j < y + h; j++)
 			{
 				drawChar(i, j, c, color);
 			}
@@ -161,7 +192,7 @@ private:
 		// Creates reference to new console screen buffer and sets it as active
 		hConsole = CreateConsoleScreenBuffer(GENERIC_READ | GENERIC_WRITE, 0, NULL, CONSOLE_TEXTMODE_BUFFER, NULL);
 		SetConsoleActiveScreenBuffer(hConsole);
-		
+
 		// Gets reference to console screen buffer size (seperate from window size) and creates a buffer to hold characters
 		_CONSOLE_SCREEN_BUFFER_INFO csbi;
 		GetConsoleScreenBufferInfo(hConsole, &csbi);
@@ -173,6 +204,9 @@ private:
 		SetConsoleWindowInfo(hConsole, TRUE, &dwBytesWritten);
 
 		screenBuffer = new CHAR_INFO[bufferSize];
+
+		hInputConsole = GetStdHandle(STD_INPUT_HANDLE);
+		SetConsoleMode(hInputConsole, ENABLE_EXTENDED_FLAGS | ENABLE_WINDOW_INPUT | ENABLE_MOUSE_INPUT);
 
 		// Initalise the screen buffer to all spaces
 		int i = 0;
@@ -194,16 +228,94 @@ private:
 		auto t1 = std::chrono::system_clock::now();
 		auto t2 = std::chrono::system_clock::now();
 
+
+
 		while (isRunning) {
 
-			t2 = std::chrono::system_clock::now();
-			std::chrono::duration<float> elapsed = t2 - t1;
-			t1 = t2;
+			while (isRunning)
+			{
+				t2 = std::chrono::system_clock::now();
+				std::chrono::duration<float> elapsed = t2 - t1;
+				t1 = t2;
 
-			float timeSinceLastFrame = elapsed.count();
+				float timeSinceLastFrame = elapsed.count();
 
-			Update(timeSinceLastFrame);
-			
+				for (int i = 0; i < 256; i++)
+				{
+					newKeystate[i] = GetAsyncKeyState(i);
+
+					keys[i].bPressed = false;
+					keys[i].bReleased = false;
+
+					if (newKeystate[i] != oldKeyState[i])
+					{
+						if (newKeystate[i] & 0x8000)
+						{
+							keys[i].bPressed = !keys[i].bHeld;
+							keys[i].bHeld = true;
+						}
+						else
+						{
+							keys[i].bReleased = true;
+							keys[i].bHeld = false;
+						}
+					}
+					oldKeyState[i] = newKeystate[i];
+
+				}
+
+				INPUT_RECORD inputBuffer[32];
+				DWORD eventNumber;
+
+				GetNumberOfConsoleInputEvents(hInputConsole, &eventNumber);
+
+				if (eventNumber > 0)
+					ReadConsoleInput(hInputConsole, inputBuffer, eventNumber, &eventNumber);
+
+				for (DWORD i = 0; i < eventNumber; i++)
+				{
+					switch (inputBuffer[i].EventType)
+					{
+					case MOUSE_EVENT:
+						if (inputBuffer[i].Event.MouseEvent.dwEventFlags == MOUSE_MOVED)
+						{
+							mousePosX = inputBuffer[i].Event.MouseEvent.dwMousePosition.X;
+							mousePosY = inputBuffer[i].Event.MouseEvent.dwMousePosition.Y;
+						}
+						if (inputBuffer[i].Event.MouseEvent.dwEventFlags == 0)
+						{
+							for (int m = 0; m < 5; m++)
+							{
+								newMouseState[m] = (inputBuffer[i].Event.MouseEvent.dwButtonState & (1 << m) > 0);
+							}
+						}
+						break;
+					default:
+						break;
+					}
+				}
+
+				for (int m = 0; m < 5; m++)
+				{
+					mouse[m].bPressed = false;
+					mouse[m].bReleased = false;
+
+					if (newMouseState[m] != oldMouseState[m])
+					{
+						mouse[m].bPressed = true;
+						mouse[m].bHeld = true;
+					}
+					else
+					{
+						mouse[m].bReleased = true;
+						mouse[m].bHeld = false;
+					}
+					oldMouseState[m] = newMouseState[m];
+				}
+
+				Update(timeSinceLastFrame);
+			}
+
 		}
 	}
 
