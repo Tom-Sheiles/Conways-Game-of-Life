@@ -2,3 +2,4 @@ Debug/
 GameOfLifeEngine.vcxproj
 GameOfLifeEngine.vcxproj.filters
 GameOfLifeEngine.vcxproj.user
+*.exe
